@@ -257,6 +257,7 @@ impl Health for ShardedClient {
             cache_len: 0,
             chunk_len: None,
             adapter_id: None,
+            skip_detokenization: false,
         };
         let batch = Batch {
             id: u64::MAX,

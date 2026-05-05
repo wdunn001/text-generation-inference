@@ -190,6 +190,7 @@ impl Client {
                 prefill_logprobs: true,
                 top_n_tokens: 20,
                 adapter_id: None,
+                skip_detokenization: false,
             });
             n_tokens += truncate;
 

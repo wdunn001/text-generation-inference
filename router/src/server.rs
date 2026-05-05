@@ -32,7 +32,6 @@ use crate::{
 use crate::{ChatTokenizeResponse, JsonSchemaConfig};
 use crate::{FunctionDefinition, HubPreprocessorConfig, ToolCall, ToolChoice};
 use crate::{MessageBody, ModelInfo, ModelsInfo};
-use async_stream::__private::AsyncStream;
 use axum::extract::{DefaultBodyLimit, Extension};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -534,16 +533,13 @@ async fn generate_stream(
     let (headers, response_stream) =
         generate_stream_internal(infer, compute_type, Json(req), span).await;
 
-    let response_stream: async_stream::AsyncStream<Result<Event, std::convert::Infallible>, _> = async_stream::stream! {
-        let mut response_stream = Box::pin(response_stream);
-        while let Some(raw_event) = response_stream.next().await {
-            yield Ok(raw_event.map_or_else(Event::from, |token| {
-                Event::default()
-                    .json_data(token)
-                    .unwrap_or_else(|e| InferError::StreamSerializationError(e.to_string()).into())
-            }));
-        }
-    };
+    let response_stream = response_stream.map(|raw_event| {
+        Ok::<_, std::convert::Infallible>(raw_event.map_or_else(Event::from, |token| {
+            Event::default()
+                .json_data(token)
+                .unwrap_or_else(|e| InferError::StreamSerializationError(e.to_string()).into())
+        }))
+    });
 
     let sse = Sse::new(response_stream).keep_alive(KeepAlive::default());
     (headers, sse).into_response()
