@@ -1004,7 +1004,7 @@ pub(crate) async fn completions(
         }
 
         // now sink the sse streams into a single stream and remove the ones that are done
-        let stream: AsyncStream<Result<Event, Infallible>, _> = async_stream::stream! {
+        let stream = async_stream::stream! {
             loop {
                 let mut i = 0;
                 while i < all_rxs.len() {
@@ -1028,7 +1028,7 @@ pub(crate) async fn completions(
         };
 
         let stream = stream.chain(futures::stream::once(async {
-            Ok(Event::default().data("[DONE]"))
+            Ok::<_, std::convert::Infallible>(Event::default().data("[DONE]"))
         }));
 
         let sse = Sse::new(stream).keep_alive(KeepAlive::default());

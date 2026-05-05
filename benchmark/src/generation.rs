@@ -161,6 +161,7 @@ async fn prefill(
             cache_len: 0,
             chunk_len: None,
             adapter_id: None,
+            skip_detokenization: false,
         })
         .collect();
 
