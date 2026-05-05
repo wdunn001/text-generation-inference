@@ -48,7 +48,7 @@ COPY benchmark benchmark
 COPY router router
 COPY backends backends
 COPY launcher launcher
-RUN cargo build --profile release-opt --frozen
+RUN cargo build --profile release-opt
 
 # ── Stage 2: Python server + runtime ─────────────────────────────────────────
 FROM python:3.11-slim
