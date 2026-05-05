@@ -534,7 +534,7 @@ async fn generate_stream(
     let (headers, response_stream) =
         generate_stream_internal(infer, compute_type, Json(req), span).await;
 
-    let response_stream = async_stream::stream! {
+    let response_stream: async_stream::AsyncStream<Result<Event, std::convert::Infallible>, _> = async_stream::stream! {
         let mut response_stream = Box::pin(response_stream);
         while let Some(raw_event) = response_stream.next().await {
             yield Ok(raw_event.map_or_else(Event::from, |token| {
@@ -851,6 +851,7 @@ pub(crate) async fn completions(
                 top_n_tokens: None,
                 grammar: None,
                 adapter_id: model.as_ref().filter(|m| *m != "tgi").map(String::from),
+                codec: false,
             },
         })
         .collect();

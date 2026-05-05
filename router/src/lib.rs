@@ -1038,6 +1038,7 @@ impl ChatRequest {
                     top_n_tokens: top_logprobs,
                     grammar,
                     adapter_id: model.filter(|m| *m != "tgi"),
+                    codec: false,
                 },
             },
             using_tools,
