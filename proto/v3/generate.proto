@@ -147,6 +147,9 @@ message Request {
   /// Chunk of tokens that must be computed for the first prefill
   /// This value is set for the first prefill and never reset
   optional uint32 chunk_len = 14;
+  /// Skip detokenization — omit the texts field in Tokens responses.
+  /// Used by Codec clients that consume token IDs directly and never render text.
+  bool skip_detokenization = 15;
 }
 
 message Batch {

@@ -443,6 +443,7 @@ impl Validation {
             stopping_parameters,
             top_n_tokens,
             adapter_id,
+            skip_detokenization: request.parameters.codec,
         })
     }
 
@@ -956,6 +957,9 @@ pub struct ValidGenerateRequest {
     pub stopping_parameters: ValidStoppingParameters,
     pub top_n_tokens: u32,
     pub adapter_id: Option<String>,
+    /// When true the Python model server omits detokenization, returning empty
+    /// texts fields. Used by Codec binary clients that consume token IDs directly.
+    pub skip_detokenization: bool,
 }
 
 #[derive(Error, Debug)]

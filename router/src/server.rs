@@ -1,4 +1,5 @@
 use crate::chat::{ChatChoice, ChatEvent, ChatState};
+use rmp_serde;
 /// HTTP Server logic
 use crate::config::Config;
 use crate::infer::{Backend, Infer, InferError, InferResponse, InferStreamResponse};
@@ -478,15 +479,58 @@ async fn generate_stream(
     Extension(compute_type): Extension<ComputeType>,
     Extension(context): Extension<Option<opentelemetry::Context>>,
     Json(req): Json<GenerateRequest>,
-) -> (
-    HeaderMap,
-    Sse<impl Stream<Item = Result<Event, Infallible>>>,
-) {
+) -> Response {
     let span = tracing::Span::current();
     if let Some(context) = context {
         span.set_parent(context);
     }
 
+    // Codec mode: skip detokenization, return binary MessagePack stream.
+    if req.parameters.codec {
+        let mut generation_stream = match infer.schedule_codec(req).await {
+            Ok(s) => s,
+            Err(err) => {
+                let status = StatusCode::UNPROCESSABLE_ENTITY;
+                return (status, Json(serde_json::json!({"error": err.to_string()}))).into_response();
+            }
+        };
+
+        let codec_stream = async_stream::stream! {
+            while let Some(response) = generation_stream.next().await {
+                match response {
+                    Ok(InferStreamResponse::Prefill(_)) => {}
+                    Ok(InferStreamResponse::Intermediate { token, .. }) => {
+                        let frame = CodecFrame { ids: vec![token.id], done: false, finish_reason: None };
+                        if let Ok(bytes) = rmp_serde::to_vec_named(&frame) {
+                            yield Ok::<_, Infallible>(bytes::Bytes::from(bytes));
+                        }
+                    }
+                    Ok(InferStreamResponse::End { token, generated_text, .. }) => {
+                        let frame = CodecFrame {
+                            ids: vec![token.id],
+                            done: true,
+                            finish_reason: Some(format!("{:?}", generated_text.finish_reason)),
+                        };
+                        if let Ok(bytes) = rmp_serde::to_vec_named(&frame) {
+                            yield Ok::<_, Infallible>(bytes::Bytes::from(bytes));
+                        }
+                        break;
+                    }
+                    Err(err) => {
+                        tracing::error!("Codec stream error: {err}");
+                        break;
+                    }
+                }
+            }
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", "application/x-msgpack".parse().unwrap());
+        headers.insert("X-Accel-Buffering", "no".parse().unwrap());
+        return (headers, axum::body::Body::from_stream(codec_stream)).into_response();
+    }
+
+    // Default: JSON/SSE text stream.
     let (headers, response_stream) =
         generate_stream_internal(infer, compute_type, Json(req), span).await;
 
@@ -502,7 +546,7 @@ async fn generate_stream(
     };
 
     let sse = Sse::new(response_stream).keep_alive(KeepAlive::default());
-    (headers, sse)
+    (headers, sse).into_response()
 }
 
 async fn generate_stream_internal(
@@ -676,6 +720,15 @@ async fn generate_stream_internal(
     };
 
     (headers, stream)
+}
+
+// Codec wire frame — used by generate_stream when req.codec = true.
+#[derive(serde::Serialize)]
+struct CodecFrame {
+    ids: Vec<u32>,
+    done: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finish_reason: Option<String>,
 }
 
 /// Generate tokens

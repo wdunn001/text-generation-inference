@@ -477,6 +477,7 @@ impl State {
                 cache_len: prefix_len,
                 adapter_id: entry.request.adapter_id.clone(),
                 chunk_len,
+                skip_detokenization: entry.request.skip_detokenization,
             });
             // Set batch_time
             entry.batch_time = Some(Instant::now());

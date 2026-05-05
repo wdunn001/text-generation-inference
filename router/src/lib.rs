@@ -431,6 +431,14 @@ pub(crate) struct GenerateParameters {
     #[serde(default)]
     #[schema(nullable = true, default = "null", example = "null")]
     pub adapter_id: Option<String>,
+
+    /// Stream token IDs as binary MessagePack frames instead of JSON/SSE text.
+    /// When true, the response Content-Type is `application/x-msgpack`,
+    /// detokenization is skipped on the model server, and each chunk is a
+    /// MessagePack-encoded object: `{ids: [u32], done: bool, finish_reason?: str}`.
+    #[serde(default)]
+    #[schema(default = "false", example = false)]
+    pub codec: bool,
 }
 
 fn default_parameters() -> GenerateParameters {
@@ -454,6 +462,7 @@ fn default_parameters() -> GenerateParameters {
         top_n_tokens: None,
         grammar: None,
         adapter_id: None,
+        codec: false,
     }
 }
 
@@ -1345,6 +1354,7 @@ pub(crate) struct GenerateRequest {
     /// we shouldn't add the special tokens.
     #[serde(default = "default_true", skip)]
     pub add_special_tokens: bool,
+
 }
 
 fn default_true() -> bool {

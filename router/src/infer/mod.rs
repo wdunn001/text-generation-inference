@@ -199,6 +199,23 @@ impl Infer {
         Ok((permit, input_length, final_stream))
     }
 
+    /// Validate and schedule a request with detokenization disabled.
+    /// Returns the raw InferStreamResponse stream — the caller is responsible
+    /// for packing the token IDs into a binary wire format (e.g. MessagePack).
+    #[instrument(skip_all)]
+    pub(crate) async fn schedule_codec(
+        &self,
+        request: GenerateRequest,
+    ) -> Result<UnboundedReceiverStream<Result<InferStreamResponse, InferError>>, InferError> {
+        let mut valid_request = self.validation.validate(request).await.map_err(|err| {
+            metrics::counter!("tgi_request_failure", "err" => "validation").increment(1);
+            tracing::error!("{err}");
+            err
+        })?;
+        valid_request.skip_detokenization = true;
+        self.backend.schedule(valid_request)
+    }
+
     /// Tokenizer the input
     #[instrument(skip_all)]
     pub(crate) async fn tokenize(

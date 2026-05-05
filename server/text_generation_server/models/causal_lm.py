@@ -801,11 +801,14 @@ class CausalLM(Model):
                         -new_input_length:-1
                     ].tolist()
                     prefill_token_ids = all_input_ids[-new_input_length:-1]
-                    prefill_texts = self.tokenizer.batch_decode(
-                        prefill_token_ids,
-                        clean_up_tokenization_spaces=False,
-                        skip_special_tokens=False,
-                    )
+                    if request.skip_detokenization:
+                        prefill_texts = [""] * len(prefill_token_ids)
+                    else:
+                        prefill_texts = self.tokenizer.batch_decode(
+                            prefill_token_ids,
+                            clean_up_tokenization_spaces=False,
+                            skip_special_tokens=False,
+                        )
                     prefill_tokens = Tokens(
                         prefill_token_ids,
                         prefill_logprobs,
@@ -820,11 +823,14 @@ class CausalLM(Model):
                     for top_token_ids, top_token_logprobs in zip(
                         top_token_ids, top_token_logprobs
                     ):
-                        toptoken_texts = self.tokenizer.batch_decode(
-                            top_token_ids,
-                            clean_up_tokenization_spaces=False,
-                            skip_special_tokens=False,
-                        )
+                        if request.skip_detokenization:
+                            toptoken_texts = [""] * len(top_token_ids)
+                        else:
+                            toptoken_texts = self.tokenizer.batch_decode(
+                                top_token_ids,
+                                clean_up_tokenization_spaces=False,
+                                skip_special_tokens=False,
+                            )
                         special_toptokens = [
                             token_id in self.all_special_ids
                             for token_id in top_token_ids
@@ -846,7 +852,7 @@ class CausalLM(Model):
                     Tokens(
                         [next_token_id_squeezed],
                         [next_token_logprob],
-                        [next_token_text],
+                        [""] if request.skip_detokenization else [next_token_text],
                         [next_token_id_squeezed.item() in self.all_special_ids],
                     ),
                     generated_text,
