@@ -439,6 +439,20 @@ pub(crate) struct GenerateParameters {
     #[serde(default)]
     #[schema(default = "false", example = false)]
     pub codec: bool,
+
+    /// Codec wire format axis (v0.5+).
+    ///
+    /// One of:
+    ///   - "json"     — default JSON/SSE behaviour. `codec` flag is independent.
+    ///   - "msgpack"  — (Codec) msgpack-encoded `{ids, done, finish_reason}`.
+    ///   - "protobuf" — (Codec) 4-byte-length-prefixed CodecFrame protobuf.
+    ///
+    /// When set to a non-"json" value, implies `codec = true` and selects the
+    /// wire encoding. Defaults to None (no explicit selection); the boolean
+    /// `codec` flag stays the v0.4-compatible toggle for msgpack.
+    #[serde(default)]
+    #[schema(default = "json", example = "msgpack")]
+    pub stream_format: Option<String>,
 }
 
 fn default_parameters() -> GenerateParameters {
@@ -463,6 +477,7 @@ fn default_parameters() -> GenerateParameters {
         grammar: None,
         adapter_id: None,
         codec: false,
+        stream_format: None,
     }
 }
 
@@ -1039,6 +1054,7 @@ impl ChatRequest {
                     grammar,
                     adapter_id: model.filter(|m| *m != "tgi"),
                     codec: false,
+        stream_format: None,
                 },
             },
             using_tools,

@@ -240,6 +240,71 @@ async fn health(infer: Extension<Infer>) -> Result<(), (StatusCode, Json<ErrorRe
     }
 }
 
+// ── Codec v0.5 discovery endpoints ────────────────────────────────────────
+//
+// Mirrors the sglang/vLLM/llama.cpp endpoints. Clients fetch /codec/schema
+// to build their own decoders, and /codec/version to gate per-version
+// features. Both endpoints are intentionally minimal — no authentication,
+// no rate limit — so the protocol-acceptance probes in the cross-stack
+// bench can run against a fresh image with no setup.
+
+/// The protobuf schema for CodecFrame / CodecRequest. Stable across the
+/// v0.2-v0.5 line; v0.5 adds optional fields but keeps existing field
+/// numbers per the spec's no-breaking-changes-in-minor-versions rule.
+const CODEC_PROTO_SCHEMA: &str = r#"syntax = "proto3";
+
+// One output chunk from the server.
+message CodecFrame {
+  repeated uint32 ids           = 1 [packed = true];
+  bool            done          = 2;
+  optional string finish_reason = 3;
+}
+
+// Input to /v1/completions when stream_format is "msgpack" or "protobuf".
+message CodecRequest {
+  repeated uint32 prompt_ids    = 1 [packed = true];
+  uint32          max_tokens    = 2;
+  float           temperature   = 3;
+  repeated string stop          = 4;
+  string          stream_format = 5;
+}
+"#;
+
+/// Codec protocol version handshake response.
+#[derive(serde::Serialize)]
+struct CodecVersionInfo {
+    /// Highest Codec protocol minor version this engine implements.
+    version: &'static str,
+    /// Wire encodings the engine speaks. Subset of ["msgpack", "protobuf"].
+    stream_formats: Vec<&'static str>,
+    /// Whether the engine supports the optional v0.5 delta-varint axis.
+    delta_varint: bool,
+    /// Whether the engine supports the bolt-on tool dispatcher.
+    bolt_on_dispatch: bool,
+}
+
+async fn codec_schema() -> Response {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        CODEC_PROTO_SCHEMA,
+    ).into_response()
+}
+
+async fn codec_version() -> Json<CodecVersionInfo> {
+    Json(CodecVersionInfo {
+        version: "0.5",
+        stream_formats: vec!["msgpack", "protobuf"],
+        // TGI's v0.5 fork ships msgpack + protobuf wire only — the
+        // delta-varint axis is queued for the next pass (see
+        // Codec/docs/engine-fork-tasks/v0.5-rollout.md § Task #78).
+        delta_varint: false,
+        // Bolt-on dispatch isn't wired into the TGI streaming loop yet
+        // (the dispatcher contract is shipped on sglang + vllm; TGI
+        // follows in a separate pass).
+        bolt_on_dispatch: false,
+    })
+}
+
 /// Generate tokens
 #[utoipa::path(
 post,
@@ -2291,7 +2356,14 @@ async fn start(
         .route("/health", get(health))
         .route("/ping", get(health))
         .route("/metrics", get(metrics))
-        .route("/v1/models", get(openai_get_model_info));
+        .route("/v1/models", get(openai_get_model_info))
+        // Codec v0.5: protocol-discovery endpoints. Mirror sglang/vllm.
+        // /codec/schema returns the protobuf schema text for client code
+        //   generation (clients fetch this to build their own decoders).
+        // /codec/version returns the Codec protocol version this engine
+        //   speaks — clients use it to gate per-version features.
+        .route("/codec/schema", get(codec_schema))
+        .route("/codec/version", get(codec_version));
 
     let compute_type =
         ComputeType(std::env::var("COMPUTE_TYPE").unwrap_or("gpu+optimized".to_string()));
