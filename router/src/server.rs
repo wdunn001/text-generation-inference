@@ -549,8 +549,15 @@ async fn generate_stream(
         span.set_parent(context);
     }
 
-    // Codec mode: skip detokenization, return binary MessagePack stream.
-    if req.parameters.codec {
+    // Codec mode: skip detokenization, return binary MessagePack OR
+    // Protobuf stream depending on the request's stream_format axis.
+    // The boolean `codec` flag stays v0.4-compatible (msgpack). The
+    // v0.5 `stream_format` field selects between "msgpack" / "protobuf".
+    let codec_active = req.parameters.codec
+        || matches!(req.parameters.stream_format.as_deref(), Some("msgpack") | Some("protobuf"));
+    let use_protobuf = matches!(req.parameters.stream_format.as_deref(), Some("protobuf"));
+
+    if codec_active {
         let mut generation_stream = match infer.schedule_codec(req).await {
             Ok(s) => s,
             Err(err) => {
@@ -565,7 +572,12 @@ async fn generate_stream(
                     Ok(InferStreamResponse::Prefill(_)) => {}
                     Ok(InferStreamResponse::Intermediate { token, .. }) => {
                         let frame = CodecFrame { ids: vec![token.id], done: false, finish_reason: None };
-                        if let Ok(bytes) = rmp_serde::to_vec_named(&frame) {
+                        let bytes_opt = if use_protobuf {
+                            encode_codec_frame_protobuf(&frame).ok()
+                        } else {
+                            rmp_serde::to_vec_named(&frame).ok()
+                        };
+                        if let Some(bytes) = bytes_opt {
                             yield Ok::<_, Infallible>(bytes::Bytes::from(bytes));
                         }
                     }
@@ -575,7 +587,12 @@ async fn generate_stream(
                             done: true,
                             finish_reason: Some(format!("{:?}", generated_text.finish_reason)),
                         };
-                        if let Ok(bytes) = rmp_serde::to_vec_named(&frame) {
+                        let bytes_opt = if use_protobuf {
+                            encode_codec_frame_protobuf(&frame).ok()
+                        } else {
+                            rmp_serde::to_vec_named(&frame).ok()
+                        };
+                        if let Some(bytes) = bytes_opt {
                             yield Ok::<_, Infallible>(bytes::Bytes::from(bytes));
                         }
                         break;
@@ -589,8 +606,16 @@ async fn generate_stream(
         };
 
         let mut headers = HeaderMap::new();
-        headers.insert("content-type", "application/x-msgpack".parse().unwrap());
+        let ct = if use_protobuf {
+            "application/x-protobuf"
+        } else {
+            "application/x-msgpack"
+        };
+        headers.insert("content-type", ct.parse().unwrap());
         headers.insert("X-Accel-Buffering", "no".parse().unwrap());
+        // v0.5: announce the protocol version on every Codec response so
+        // clients can gate per-version features without a separate probe.
+        headers.insert("codec-server-version", "0.5".parse().unwrap());
         return (headers, axum::body::Body::from_stream(codec_stream)).into_response();
     }
 
@@ -783,13 +808,64 @@ async fn generate_stream_internal(
     (headers, stream)
 }
 
-// Codec wire frame — used by generate_stream when req.codec = true.
+// Codec wire frame — used by generate_stream when req.codec = true or
+// req.stream_format is "msgpack"/"protobuf".
 #[derive(serde::Serialize)]
 struct CodecFrame {
     ids: Vec<u32>,
     done: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     finish_reason: Option<String>,
+}
+
+/// Hand-rolled protobuf encoder for CodecFrame. Matches the wire shape
+/// used by the sglang + vllm + llama.cpp forks: 4-byte big-endian length
+/// prefix, then field 1 (packed repeated uint32 ids), field 2 (bool
+/// done), optional field 3 (string finish_reason).
+fn encode_codec_frame_protobuf(frame: &CodecFrame) -> Result<Vec<u8>, ()> {
+    fn write_varint(out: &mut Vec<u8>, mut n: u64) {
+        loop {
+            let bits = (n & 0x7F) as u8;
+            n >>= 7;
+            if n == 0 {
+                out.push(bits);
+                break;
+            } else {
+                out.push(bits | 0x80);
+            }
+        }
+    }
+
+    let mut payload: Vec<u8> = Vec::with_capacity(16 + frame.ids.len() * 4);
+
+    // Field 1: repeated uint32 ids [packed] — tag 0x0a, len-delimited
+    if !frame.ids.is_empty() {
+        let mut packed: Vec<u8> = Vec::with_capacity(frame.ids.len() * 2);
+        for &id in &frame.ids {
+            write_varint(&mut packed, id as u64);
+        }
+        payload.push(0x0a);
+        write_varint(&mut payload, packed.len() as u64);
+        payload.extend_from_slice(&packed);
+    }
+
+    // Field 2: bool done — tag 0x10, varint
+    payload.push(0x10);
+    payload.push(if frame.done { 0x01 } else { 0x00 });
+
+    // Field 3: optional string finish_reason — tag 0x1a, len-delimited
+    if let Some(reason) = &frame.finish_reason {
+        let bytes = reason.as_bytes();
+        payload.push(0x1a);
+        write_varint(&mut payload, bytes.len() as u64);
+        payload.extend_from_slice(bytes);
+    }
+
+    // 4-byte big-endian length prefix
+    let mut out: Vec<u8> = Vec::with_capacity(4 + payload.len());
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(&payload);
+    Ok(out)
 }
 
 /// Generate tokens

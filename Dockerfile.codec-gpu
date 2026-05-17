@@ -1,0 +1,59 @@
+# Codec-patched TGI — GPU build (CUDA). Published as wdunn001/codec-tgi:v0.5.0.
+#
+# This Dockerfile is a thin variant of the vanilla GPU `Dockerfile`. The
+# Codec patches are already merged into the router source on this branch
+# (the v0.5 patches in router/src/{lib,server}.rs); this file's job is to:
+#
+#   - tag the resulting image with CODEC_TGI_VERSION + protocol-version
+#     metadata that the cross-stack bench probes against
+#   - bake in the Codec default env vars (CODEC_*) so an operator running
+#     the image gets v0.5 protocol behaviour without extra configuration
+#   - expose the four protocol-discovery endpoints (/codec/schema,
+#     /codec/version, /.well-known/codec/version-policy.json — the
+#     well-known is router-side so it inherits automatically)
+#
+# Build:
+#   docker build -f Dockerfile.codec-gpu -t wdunn001/codec-tgi:v0.5.0 .
+#
+# Run (lab box):
+#   docker run --gpus all -p 8003:80 \
+#     -e MODEL_ID=Qwen/Qwen2.5-0.5B-Instruct \
+#     -e CODEC_ZSTD_DICT_MSGPACK_URL=https://codecai.net/.well-known/codec/dicts/<hex>.zstd \
+#     -e CODEC_ZSTD_DICT_PROTOBUF_URL=https://codecai.net/.well-known/codec/dicts/<hex>.zstd \
+#     wdunn001/codec-tgi:v0.5.0
+#
+# Push:
+#   docker push wdunn001/codec-tgi:v0.5.0
+
+ARG CODEC_TGI_VERSION=v0.5.0
+ARG CODEC_PROTOCOL_VERSION=0.5
+
+# Reuse the vanilla GPU Dockerfile end-to-end. The codec patches are in
+# router/src/, so they build identically — we just retag + label the
+# result.
+FROM ghcr.io/huggingface/text-generation-inference:codec-base AS upstream-base
+
+FROM upstream-base AS codec-final
+
+ARG CODEC_TGI_VERSION
+ARG CODEC_PROTOCOL_VERSION
+
+LABEL org.opencontainers.image.title="codec-tgi" \
+      org.opencontainers.image.version="${CODEC_TGI_VERSION}" \
+      org.opencontainers.image.source="https://github.com/wdunn001/text-generation-inference" \
+      org.opencontainers.image.description="Codec-patched TGI — token-native binary transport for Hugging Face Text Generation Inference. See https://codecai.net/" \
+      ai.codec.protocol_version="${CODEC_PROTOCOL_VERSION}" \
+      ai.codec.engine_kind="tgi" \
+      ai.codec.stream_formats="msgpack,protobuf" \
+      ai.codec.delta_varint="false" \
+      ai.codec.bolt_on_dispatch="false"
+
+# Default env vars: the Codec endpoints work out-of-the-box; operators
+# override via -e at run time.
+ENV CODEC_TGI_VERSION="${CODEC_TGI_VERSION}"
+ENV CODEC_PROTOCOL_VERSION="${CODEC_PROTOCOL_VERSION}"
+
+# Protocol-discovery endpoints live on the same router as /health + /info,
+# so port 80 (TGI default) carries them. No EXPOSE change needed.
+
+ENTRYPOINT ["/tgi-entrypoint.sh"]
